@@ -34,6 +34,7 @@ class OverlayService : Service(), ClockListener {
 
     override fun onCreate() {
         super.onCreate()
+        SettingsStore.init(applicationContext)
         startForegroundNotification()
         buildOverlay()
         PlaybackClock.addListener(this)

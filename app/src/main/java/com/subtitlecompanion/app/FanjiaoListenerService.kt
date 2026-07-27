@@ -35,6 +35,7 @@ class FanjiaoListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        SettingsStore.init(applicationContext)
         attach()
     }
 
