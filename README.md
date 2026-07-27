@@ -135,15 +135,52 @@ for the new build.
 - **New file types**: load `.ass`/`.ssa` and `.lrc` files, not just `.srt`.
 - **Folder mode**: tap "Load subtitle folder" and pick a folder containing
   one subtitle file per episode/title. As Fanjiao's reported track title
-  changes, the app matches it by name and auto-loads the right file. If a
-  title doesn't match anything well enough, whatever's currently loaded
-  stays put rather than guessing wrong.
+  changes, the app matches it by name and auto-loads the right file.
 - Your last-loaded single file (or folder) reopens automatically the next
   time you launch the app.
-- **Support button**: add a link (e.g. your Patreon) in Style settings and
-  a small "Support" button appears on the main screen; a one-time, low-key
-  invite also shows the first time you start floating subtitles each
-  session. Leave the link blank and neither appears.
+- **Support button**: shown only if a support link is hardcoded in by me;
+  hidden otherwise. Not user-editable.
 - More text colors, panel colors, and a bold-text option in Style settings.
 - App renamed to "Sub on Top" with a proper launcher icon and in-app
   branding, both built from your lily logo.
+
+## Fixes in this round
+
+- **Centering**: the floating panel now uses a fixed width instead of
+  shrink-to-fit, so every line's text lands at the same horizontal center
+  regardless of length. Vertical position is now tracked as a stable center
+  point too, so the panel grows/shrinks evenly instead of drifting when a
+  line wraps to more rows. Dragging the panel updates that center, so a
+  manual placement sticks instead of snapping back.
+- **Same-line flicker**: this was Fanjiao's own position reporting jitter
+  (small, normal noise in how often/precisely it publishes playback
+  position) resetting the local clock on every single report. The clock now
+  only resyncs to Fanjiao's reported position when the drift is large
+  enough to actually be a seek (call it real skip vs. noise), so tiny
+  jitter no longer yanks a line on/off repeatedly. Big jumps -- including
+  -15s/+15s -- still mirror immediately.
+- **Sync offset**: now defaults to -0.5s out of the box (previously 0),
+  matching what real testing kept landing on manually. Still adjustable
+  with the +/- nudge buttons, and still remembered from there.
+- **Folder-mode matching**: if the currently playing title doesn't match
+  any file in your folder, the display now clears instead of leaving a
+  different episode's captions on screen. It keeps trying on every future
+  title change and loads correctly the moment a real match shows up again.
+  Matching itself is also stricter now (requires the overlap to cover most
+  of the reported title, not just a handful of characters) to cut down on
+  coincidental wrong-episode switches.
+- **Stop button visibility**: the floating-subtitles button in the app now
+  turns red and pulses while running, so it's easy to spot at a glance.
+- **Support link**: no longer an editable field in Settings -- it's a
+  single hardcoded constant near the top of `MainActivity.kt`
+  (`SUPPORT_LINK_URL`). Leave it blank and the button stays hidden; send me
+  a URL and I'll fill it in for you.
+
+### Known remaining limitation on sync
+
+The steady-state jitter fix above only smooths *ongoing* jitter. The very
+first moment after a seek/skip inside Fanjiao, there's still a small,
+unavoidable delay before Fanjiao itself publishes the updated position to
+Android -- that gap is on Fanjiao's side, not something a companion app can
+read faster than Fanjiao chooses to report it. The -0.5s baseline offset
+helps on average but won't perfectly erase that one-time gap on every skip.

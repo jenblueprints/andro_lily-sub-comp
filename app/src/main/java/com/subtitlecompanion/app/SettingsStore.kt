@@ -3,6 +3,12 @@ package com.subtitlecompanion.app
 import android.content.Context
 import android.content.SharedPreferences
 
+// Real-world testing keeps landing on -0.5s as the correction Fanjiao's
+// reported media-session position needs versus the actual audio, so that's
+// the built-in starting point rather than 0 -- avoids needing to manually
+// nudge it every single time before it's usable.
+private const val DEFAULT_OFFSET_MS = -500L
+
 data class CaptionSettings(
     var shape: String = "bar",
     var position: String = "middle",
@@ -18,7 +24,10 @@ data class CaptionSettings(
     var overlayScalePct: Float = 100f,
     // Saved so the manual sync nudge you dial in doesn't need to be redone
     // every single session -- it's applied automatically on the next load.
-    var savedOffsetMs: Long = 0L,
+    // Defaults to -500ms (see DEFAULT_OFFSET_MS below) since that's the
+    // correction that's consistently needed out of the box; nudge from
+    // there with +/- if a particular episode still feels off.
+    var savedOffsetMs: Long = DEFAULT_OFFSET_MS,
     // "single" (one file, remembered across launches) or "folder" (a whole
     // directory, auto-matched by title as Fanjiao switches episodes).
     var libraryMode: String = "single",
@@ -26,9 +35,6 @@ data class CaptionSettings(
     // automatically on the next app launch, instead of picking it every time.
     var lastSingleFileUri: String = "",
     var subtitleFolderUri: String = "",
-    // Optional support/donation link shown as a button in the app and (once
-    // per app session) as a small invite when floating subtitles start.
-    var supportLinkUrl: String = "",
     // Left blank on purpose: nobody should trust a guessed package name here.
     // Use the in-app "Detect now" button while Fanjiao is playing to find the
     // real value, then save it.
@@ -56,11 +62,10 @@ object SettingsStore {
         textBold = prefs.getBoolean("textBold", false),
         showNext = prefs.getBoolean("showNext", false),
         overlayScalePct = prefs.getFloat("overlayScalePct", 100f),
-        savedOffsetMs = prefs.getLong("savedOffsetMs", 0L),
+        savedOffsetMs = prefs.getLong("savedOffsetMs", DEFAULT_OFFSET_MS),
         libraryMode = prefs.getString("libraryMode", "single") ?: "single",
         lastSingleFileUri = prefs.getString("lastSingleFileUri", "") ?: "",
         subtitleFolderUri = prefs.getString("subtitleFolderUri", "") ?: "",
-        supportLinkUrl = prefs.getString("supportLinkUrl", "") ?: "",
         fanjiaoPackage = prefs.getString("fanjiaoPackage", "") ?: ""
     )
 
@@ -80,7 +85,6 @@ object SettingsStore {
             .putString("libraryMode", s.libraryMode)
             .putString("lastSingleFileUri", s.lastSingleFileUri)
             .putString("subtitleFolderUri", s.subtitleFolderUri)
-            .putString("supportLinkUrl", s.supportLinkUrl)
             .putString("fanjiaoPackage", s.fanjiaoPackage)
             .apply()
     }

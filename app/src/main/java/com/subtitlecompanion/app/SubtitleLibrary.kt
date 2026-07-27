@@ -96,9 +96,12 @@ object SubtitleLibrary {
             }
             if (score > bestScore) { bestScore = score; best = f }
         }
-        // Require a reasonably long overlap so a couple of coincidental
-        // matching characters doesn't swap in the wrong episode.
-        return if (bestScore >= 3) best else null
+        // Require both a reasonably long overlap AND that the overlap covers
+        // a real majority of the reported title -- a few coincidentally
+        // shared characters shouldn't be enough to swap in a wrong episode.
+        // Below this bar we'd rather show nothing than guess wrong.
+        val ratio = if (target.isNotEmpty()) bestScore.toFloat() / target.length else 0f
+        return if (bestScore >= 3 && ratio >= 0.5f) best else null
     }
 
     /** Called whenever Fanjiao reports a (possibly new) track title. Returns
@@ -106,7 +109,20 @@ object SubtitleLibrary {
     fun loadForTitle(title: String): Boolean {
         if (!isFolderMode()) return false
         lastAttemptedTitle = title
-        val match = findBestMatch(title) ?: run { notifyChanged(); return false }
+        val match = findBestMatch(title)
+        if (match == null) {
+            // Nothing in the folder matches this track. Don't guess by
+            // leaving whatever was showing for a different episode up --
+            // clear it and wait. The moment a future title change matches
+            // a file we do have, loadForTitle runs again and picks it up;
+            // nothing here needs to be "reset" for that to keep working.
+            if (lastMatchedName != null) {
+                PlaybackClock.clear()
+                lastMatchedName = null
+            }
+            notifyChanged()
+            return false
+        }
         if (match.name == lastMatchedName) return true // already showing this one
         return try {
             val text = appContext.contentResolver.openInputStream(match.uri)?.use {

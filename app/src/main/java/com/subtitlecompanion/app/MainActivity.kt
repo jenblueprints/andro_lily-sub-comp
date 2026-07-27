@@ -1,13 +1,19 @@
 package com.subtitlecompanion.app
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.view.View
+import android.view.animation.LinearInterpolator
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -18,6 +24,12 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
+
+// Hardcoded on purpose per your request -- no in-app field for this, so
+// nobody else running the app can edit it. Tell me the real URL and I'll
+// fill this constant in and ship it; leave it blank and the Support button
+// stays hidden.
+private const val SUPPORT_LINK_URL = ""
 
 class MainActivity : AppCompatActivity(), ClockListener {
 
@@ -37,6 +49,8 @@ class MainActivity : AppCompatActivity(), ClockListener {
 
     private var userIsScrubbing = false
     private var didShowSupportPromptThisSession = false
+    private var pulseAnimator: ObjectAnimator? = null
+    private var defaultFloatingButtonBg: Drawable? = null
 
     private val libraryListener: () -> Unit = { runOnUiThread { refreshLibraryStatus() } }
 
@@ -156,14 +170,18 @@ class MainActivity : AppCompatActivity(), ClockListener {
             Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show()
         }
         floatingButton = findViewById(R.id.floatingButton)
+        defaultFloatingButtonBg = floatingButton.background
         floatingButton.setOnClickListener {
             toggleOverlay()
         }
         findViewById<MaterialButton>(R.id.styleButton).setOnClickListener {
             SettingsSheet().show(supportFragmentManager, "settings")
         }
-        findViewById<MaterialButton>(R.id.supportButton).setOnClickListener {
-            openSupportLink()
+        val supportButton = findViewById<MaterialButton>(R.id.supportButton)
+        if (SUPPORT_LINK_URL.isBlank()) {
+            supportButton.visibility = View.GONE
+        } else {
+            supportButton.setOnClickListener { openSupportLink() }
         }
 
         packageInput.setText(SettingsStore.load().fanjiaoPackage)
@@ -185,6 +203,7 @@ class MainActivity : AppCompatActivity(), ClockListener {
     override fun onDestroy() {
         PlaybackClock.removeListener(this)
         SubtitleLibrary.removeListener(libraryListener)
+        stopPulse()
         super.onDestroy()
     }
 
@@ -265,7 +284,34 @@ class MainActivity : AppCompatActivity(), ClockListener {
     }
 
     private fun updateFloatingButtonLabel() {
-        floatingButton.text = if (OverlayService.isRunning) "Stop floating subtitles" else "Start floating subtitles"
+        if (OverlayService.isRunning) {
+            floatingButton.text = "\u23F9  Stop floating subtitles"
+            floatingButton.setBackgroundColor(Color.parseColor("#E4574C"))
+            startPulse()
+        } else {
+            floatingButton.text = "Start floating subtitles"
+            floatingButton.background = defaultFloatingButtonBg
+            stopPulse()
+        }
+    }
+
+    /** Gentle looping fade so the Stop button is easy to spot at a glance
+     *  when you switch back to the app -- same idea as the pulsing record
+     *  indicator in subtitle-companion.html. */
+    private fun startPulse() {
+        if (pulseAnimator != null) return
+        val anim = ObjectAnimator.ofFloat(floatingButton, View.ALPHA, 1f, 0.55f, 1f)
+        anim.duration = 1100
+        anim.repeatCount = ValueAnimator.INFINITE
+        anim.interpolator = LinearInterpolator()
+        anim.start()
+        pulseAnimator = anim
+    }
+
+    private fun stopPulse() {
+        pulseAnimator?.cancel()
+        pulseAnimator = null
+        floatingButton.alpha = 1f
     }
 
     private fun toggleOverlay() {
@@ -289,23 +335,17 @@ class MainActivity : AppCompatActivity(), ClockListener {
     }
 
     /** A single, low-pressure invite per app session -- not every time
-     *  floating subtitles start, and only if you've set a support link. */
+     *  floating subtitles start, and only if a support link is hardcoded in. */
     private fun maybeShowSupportPrompt() {
-        if (didShowSupportPromptThisSession) return
-        val link = SettingsStore.load().supportLinkUrl
-        if (link.isBlank()) return
+        if (didShowSupportPromptThisSession || SUPPORT_LINK_URL.isBlank()) return
         didShowSupportPromptThisSession = true
         Toast.makeText(this, "Enjoying it? There's a Support button on the main screen \u2615", Toast.LENGTH_LONG).show()
     }
 
     private fun openSupportLink() {
-        val link = SettingsStore.load().supportLinkUrl
-        if (link.isBlank()) {
-            Toast.makeText(this, "No support link set yet - add one in Style settings", Toast.LENGTH_LONG).show()
-            return
-        }
+        if (SUPPORT_LINK_URL.isBlank()) return
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SUPPORT_LINK_URL)))
         } catch (e: Exception) {
             Toast.makeText(this, "Couldn't open that link", Toast.LENGTH_SHORT).show()
         }

@@ -45,6 +45,18 @@ object PlaybackClock {
     private var trustExternalPosition: Boolean = false
     private var trustedSampleStreak: Int = 0
 
+    // Fanjiao (like most apps) doesn't publish a new PlaybackState on every
+    // millisecond -- it reports periodically, and each report can be off by
+    // a couple hundred ms from truth due to its own internal buffering/
+    // rounding. If we resync our local clock to every single report, that
+    // per-report jitter shows up as the local clock jumping slightly back
+    // and forth -- which, right at a cue boundary, flickers the same line
+    // on and off repeatedly. Real seeks (-15s, +15s, scrubs) are always far
+    // bigger than this jitter, so only resync when the drift is large
+    // enough to actually be a seek, not noise. Small drift is left for the
+    // local wall clock to keep extrapolating smoothly.
+    private const val DRIFT_CORRECTION_THRESHOLD_MS = 700L
+
     private val listeners = mutableListOf<ClockListener>()
     private val handler = Handler(Looper.getMainLooper())
     private var tickRunnable: Runnable? = null
@@ -126,11 +138,20 @@ object PlaybackClock {
         }
 
         if (trustExternalPosition && positionMs != null && positionMs >= 0) {
-            elapsedAtStart = positionMs
-            wallStartNanos = nowNanos
-            if (isPlayingExternal && !playing) { playing = true; startTicking() }
-            if (!isPlayingExternal && playing) { playing = false; stopTicking() }
-            tick()
+            val playStateChanged = isPlayingExternal != playing
+            val predictedLocal = currentElapsed()
+            val drift = kotlin.math.abs(positionMs - predictedLocal)
+            if (playStateChanged || drift > DRIFT_CORRECTION_THRESHOLD_MS) {
+                // Big enough to be a real seek/skip (or a play/pause toggle)
+                // -- snap immediately so skips like -15s mirror right away.
+                elapsedAtStart = positionMs
+                wallStartNanos = nowNanos
+                if (isPlayingExternal && !playing) { playing = true; startTicking() }
+                if (!isPlayingExternal && playing) { playing = false; stopTicking() }
+                tick()
+            }
+            // else: within normal reporting jitter -- leave the local wall
+            // clock alone so the caption doesn't flicker from micro-corrections.
         } else {
             if (isPlayingExternal && !playing) play()
             if (!isPlayingExternal && playing) pause()
@@ -138,6 +159,20 @@ object PlaybackClock {
     }
 
     fun isTrustingExternalPosition() = trustExternalPosition
+
+    /** Blanks the display and stops the clock without discarding anything
+     *  else -- used when folder mode can't find a subtitle file matching
+     *  the currently playing track, so a mismatched episode's captions
+     *  don't keep showing over the wrong audio. */
+    fun clear() {
+        cues = emptyList()
+        totalMs = 0
+        elapsedAtStart = 0
+        wallStartNanos = System.nanoTime()
+        playing = false
+        stopTicking()
+        tick()
+    }
 
     private fun startTicking() {
         stopTicking()

@@ -295,30 +295,6 @@
         android:layout_height="wrap_content"
         android:text="Reset zoom to 100%" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginTop="16dp"
-        android:background="#232C37" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Support link (optional, e.g. your Patreon URL)" />
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:hint="https://patreon.com/...">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/supportLinkInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-    </com.google.android.material.textfield.TextInputLayout>
-
     <com.google.android.material.button.MaterialButton
         android:id="@+id/closeSheet"
         android:layout_width="match_parent"

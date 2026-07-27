@@ -9,7 +9,6 @@ import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
-import com.google.android.material.textfield.TextInputEditText
 
 class SettingsSheet : BottomSheetDialogFragment() {
 
@@ -30,7 +29,6 @@ class SettingsSheet : BottomSheetDialogFragment() {
         val boldToggle = view.findViewById<Chip>(R.id.boldToggle)
         val scaleValueText = view.findViewById<android.widget.TextView>(R.id.scaleValueText)
         val resetScaleButton = view.findViewById<MaterialButton>(R.id.resetScaleButton)
-        val supportLinkInput = view.findViewById<TextInputEditText>(R.id.supportLinkInput)
 
         selectChip(shapeGroup, settings.shape)
         selectChip(posGroup, settings.position)
@@ -41,7 +39,6 @@ class SettingsSheet : BottomSheetDialogFragment() {
         fontSeek.progress = settings.fontSize
         nextToggle.isChecked = settings.showNext
         boldToggle.isChecked = settings.textBold
-        supportLinkInput.setText(settings.supportLinkUrl)
         scaleValueText.text = "${settings.overlayScalePct.toInt()}%"
 
         fun persist() {
@@ -77,16 +74,7 @@ class SettingsSheet : BottomSheetDialogFragment() {
             OverlayStyleBus.notifyChanged()
         }
 
-        supportLinkInput.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) {
-                SettingsStore.update { it.supportLinkUrl = supportLinkInput.text?.toString()?.trim() ?: "" }
-            }
-        }
-
-        view.findViewById<MaterialButton>(R.id.closeSheet).setOnClickListener {
-            SettingsStore.update { it.supportLinkUrl = supportLinkInput.text?.toString()?.trim() ?: "" }
-            dismiss()
-        }
+        view.findViewById<MaterialButton>(R.id.closeSheet).setOnClickListener { dismiss() }
         return view
     }
 

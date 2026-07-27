@@ -14,7 +14,6 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
-import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -40,6 +39,23 @@ class OverlayService : Service(), ClockListener {
     private var nextTv: TextView? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var currentSettings: CaptionSettings = CaptionSettings()
+
+    // The panel's width is fixed at creation time (a share of screen width)
+    // instead of WRAP_CONTENT. That's the actual fix for "text centers in a
+    // different place depending on the line" -- with WRAP_CONTENT, the panel
+    // itself grew/shrank to fit each line, so its visual center drifted left
+    // or right as line length changed even though x never moved. A fixed
+    // width means the panel's box never changes size, so gravity=CENTER
+    // inside it lands in the same place for every line.
+    private var fixedWidthPx: Int = 0
+
+    // Vertical position is tracked as a center point (not a top edge), and
+    // re-applied any time the panel's height changes (longer lines wrapping
+    // to more rows, next-line preview toggling, etc.) so the panel grows/
+    // shrinks evenly around a stable center instead of drifting downward.
+    // Updated whenever the user manually drags, so a manual placement is
+    // respected as the new center going forward rather than snapping back.
+    private var anchorCenterY: Int = 0
 
     private val styleListener = { refreshStyle() }
 
@@ -121,20 +137,22 @@ class OverlayService : Service(), ClockListener {
 
         val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+        fixedWidthPx = (screenW * 0.86).toInt()
+
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            fixedWidthPx,
             WindowManager.LayoutParams.WRAP_CONTENT,
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
-
-        val dm = resources.displayMetrics
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
-        params.x = screenW / 4 // rough placement, re-centered below once measured
-        params.y = yForPosition(settings.position, screenH)
+        params.x = ((screenW - fixedWidthPx) / 2).coerceAtLeast(0)
+        anchorCenterY = centerYForPosition(settings.position, screenH)
+        params.y = (anchorCenterY - 60) // rough placement pre-measure; corrected below once height is known
 
         makeDraggableAndPinchable(container, params)
 
@@ -144,21 +162,27 @@ class OverlayService : Service(), ClockListener {
         currentTv = current
         nextTv = next
 
-        // WRAP_CONTENT width isn't known until after the first layout pass --
-        // re-center horizontally once it is, instead of guessing up front.
-        container.viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                container.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                params.x = ((screenW - container.width) / 2).coerceAtLeast(0)
-                try { windowManager?.updateViewLayout(container, params) } catch (e: Exception) { }
+        // Re-applies the vertical center every time this view's height
+        // changes (new line wraps to a different number of rows, next-line
+        // preview toggled, font size pinched, etc.) so the panel grows and
+        // shrinks evenly around anchorCenterY instead of drifting. Kept
+        // registered permanently rather than removed after first use.
+        container.viewTreeObserver.addOnGlobalLayoutListener {
+            val h = container.height
+            if (h > 0) {
+                val targetY = anchorCenterY - h / 2
+                if (targetY != params.y) {
+                    params.y = targetY
+                    try { windowManager?.updateViewLayout(container, params) } catch (e: Exception) { }
+                }
             }
-        })
+        }
     }
 
-    private fun yForPosition(position: String, screenH: Int): Int = when (position) {
-        "top" -> (screenH * 0.08).toInt()
-        "bottom" -> (screenH * 0.78).toInt()
-        else -> (screenH * 0.42).toInt()
+    private fun centerYForPosition(position: String, screenH: Int): Int = when (position) {
+        "top" -> (screenH * 0.16).toInt()
+        "bottom" -> (screenH * 0.84).toInt()
+        else -> (screenH * 0.5).toInt()
     }
 
     /** Re-reads settings and re-applies them to the already-built overlay
@@ -180,7 +204,8 @@ class OverlayService : Service(), ClockListener {
         nxt.visibility = if (settings.showNext) View.VISIBLE else View.GONE
 
         if (settings.position != oldPosition) {
-            params.y = yForPosition(settings.position, resources.displayMetrics.heightPixels)
+            anchorCenterY = centerYForPosition(settings.position, resources.displayMetrics.heightPixels)
+            params.y = anchorCenterY - view.height / 2
         }
         try { windowManager?.updateViewLayout(view, params) } catch (e: Exception) { }
     }
@@ -226,6 +251,12 @@ class OverlayService : Service(), ClockListener {
                     // window right/down).
                     params.x = initialX + (event.rawX - touchX).toInt()
                     params.y = initialY + (event.rawY - touchY).toInt()
+                    // Keep the recenter target following the drag, using
+                    // this view's current height -- so once you let go, a
+                    // later line-length/height change grows evenly around
+                    // where you actually put it, instead of snapping back
+                    // toward the original top/middle/bottom position.
+                    anchorCenterY = params.y + view.height / 2
                     try { windowManager?.updateViewLayout(view, params) } catch (e: Exception) { }
                     true
                 }
