@@ -109,3 +109,41 @@ against the real Fanjiao app on your phone with **Detect now**.
 - This is a debug build (unsigned with a proper release key), which is
   completely fine for installing on your own phone, but Android will always
   flag it as "unknown source" — that's expected and not a problem.
+
+## Updating an existing repo with this version
+
+If you already have this repo set up on GitHub and building via Actions,
+apply this update by dragging this whole `SubtitleCompanion` folder onto
+**Add file > Upload files** in your repo, the same way you did the first
+time. GitHub overwrites any file with a matching path and adds new ones --
+you don't need to delete anything first. Commit, then check the Actions tab
+for the new build.
+
+## What's new in this version
+
+- **Stop button**: the floating-subtitles button now actually toggles --
+  tap it again to stop, or use Stop on the notification.
+- **Dragging** the floating window now moves it the direction your finger
+  actually goes.
+- **Style settings apply live** to a floating window that's already running
+  -- no need to stop and restart it.
+- **Pinch the floating window with two fingers** to resize the text/panel
+  in real time; your zoom level is remembered.
+- Short natural gaps between subtitle lines no longer cause a blank flicker.
+- Seeking/skipping inside Fanjiao (once auto-sync has locked on) now
+  mirrors immediately, including jumps like -15s, not just play/pause.
+- **New file types**: load `.ass`/`.ssa` and `.lrc` files, not just `.srt`.
+- **Folder mode**: tap "Load subtitle folder" and pick a folder containing
+  one subtitle file per episode/title. As Fanjiao's reported track title
+  changes, the app matches it by name and auto-loads the right file. If a
+  title doesn't match anything well enough, whatever's currently loaded
+  stays put rather than guessing wrong.
+- Your last-loaded single file (or folder) reopens automatically the next
+  time you launch the app.
+- **Support button**: add a link (e.g. your Patreon) in Style settings and
+  a small "Support" button appears on the main screen; a one-time, low-key
+  invite also shows the first time you start floating subtitles each
+  session. Leave the link blank and neither appears.
+- More text colors, panel colors, and a bold-text option in Style settings.
+- App renamed to "Sub on Top" with a proper launcher icon and in-app
+  branding, both built from your lily logo.

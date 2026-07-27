@@ -11,14 +11,25 @@ import android.os.Looper
  * Because we can't know in advance whether Fanjiao's media session reports a
  * real, advancing playback position or only play/pause state, onExternalUpdate()
  * watches a few samples and only trusts the position for direct continuous sync
- * once it sees it actually advancing in step with wall time. Until then (or if it
- * never does), external updates are treated as a simple start/pause trigger.
+ * once it sees it actually advancing in step with wall time. Once that trust is
+ * earned it's kept for the rest of the session -- including big jumps, since a
+ * big jump is exactly what a seek/skip looks like and should be mirrored
+ * immediately, not filtered out as noise. Until trust is earned (or if it never
+ * is, because Fanjiao doesn't report a real position), external updates are
+ * treated as a simple start/pause trigger.
  */
 object PlaybackClock {
     var cues: List<Cue> = emptyList()
         private set
     var totalMs: Long = 0
         private set
+
+    // Real dialogue is frequently timed with tiny gaps (well under a second)
+    // between the end of one line and the start of the next. Polling every
+    // 200ms can land right inside one of those gaps and show a blank panel
+    // for a tick before the next line appears -- a visible flicker. Bridging
+    // gaps smaller than this keeps the previous line on screen through them.
+    private const val GAP_BRIDGE_MS = 450L
 
     private var elapsedAtStart: Long = 0
     private var wallStartNanos: Long = 0
@@ -47,6 +58,10 @@ object PlaybackClock {
         elapsedAtStart = 0
         wallStartNanos = System.nanoTime()
         playing = false
+        // Restore the last sync nudge you dialed in, so you don't have to
+        // re-apply "-0.5s" (or whatever you landed on) at the start of
+        // every single session.
+        offsetMs = SettingsStore.load().savedOffsetMs
         stopTicking()
         tick()
     }
@@ -86,22 +101,26 @@ object PlaybackClock {
 
     fun nudge(deltaSec: Float) {
         offsetMs += (deltaSec * 1000).toLong()
+        SettingsStore.update { it.savedOffsetMs = offsetMs }
         tick()
     }
 
     fun onExternalUpdate(isPlayingExternal: Boolean, positionMs: Long?) {
         val nowNanos = System.nanoTime()
+
         if (positionMs != null && positionMs >= 0) {
-            if (lastExternalPosMs >= 0) {
-                val posDeltaMs = positionMs - lastExternalPosMs
-                val wallDeltaMs = (nowNanos - lastExternalWallNanos) / 1_000_000L
-                if (wallDeltaMs in 200..8000 && posDeltaMs in (wallDeltaMs / 4)..(wallDeltaMs * 4)) {
-                    trustedSampleStreak++
-                } else if (posDeltaMs != 0L) {
-                    trustedSampleStreak = 0
+            if (!trustExternalPosition) {
+                // Still deciding whether Fanjiao's reported position is real
+                // (changes on its own between samples) or a dead/static
+                // placeholder some apps report. Once we've seen it actually
+                // move a couple of times, trust it for the rest of the
+                // session -- including later jumps, which are real seeks.
+                if (lastExternalPosMs >= 0) {
+                    val moved = kotlin.math.abs(positionMs - lastExternalPosMs)
+                    if (moved > 300) trustedSampleStreak++
                 }
+                if (trustedSampleStreak >= 2) trustExternalPosition = true
             }
-            trustExternalPosition = trustedSampleStreak >= 2
             lastExternalPosMs = positionMs
             lastExternalWallNanos = nowNanos
         }
@@ -142,8 +161,28 @@ object PlaybackClock {
         val effective = elapsed - offsetMs
         var activeIdx = -1
         for (i in cues.indices) {
-            if (effective >= cues[i].startMs && effective < cues[i].endMs) { activeIdx = i; break }
-            if (effective < cues[i].startMs) break
+            val cue = cues[i]
+            if (effective >= cue.startMs && effective < cue.endMs) {
+                activeIdx = i
+                break
+            }
+            if (effective < cue.startMs) {
+                // We're in a gap before cue i. If it's a short gap right
+                // after the previous cue, keep showing the previous cue
+                // instead of blanking out for one tick.
+                val prev = cues.getOrNull(i - 1)
+                if (prev != null && effective - prev.endMs in 0 until GAP_BRIDGE_MS) {
+                    activeIdx = i - 1
+                }
+                break
+            }
+        }
+        // Past the last cue: bridge a short trailing gap the same way.
+        if (activeIdx == -1 && cues.isNotEmpty()) {
+            val last = cues.last()
+            if (effective >= last.endMs && effective - last.endMs < GAP_BRIDGE_MS) {
+                activeIdx = cues.lastIndex
+            }
         }
         val snapshot = listeners.toList()
         snapshot.forEach { it.onTick(elapsed, totalMs, activeIdx) }

@@ -2,9 +2,11 @@ package com.subtitlecompanion.app
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.SeekBar
 import android.widget.TextView
@@ -30,11 +32,38 @@ class MainActivity : AppCompatActivity(), ClockListener {
     private lateinit var packageInput: TextInputEditText
     private lateinit var detectedList: TextView
     private lateinit var transcriptAdapter: TranscriptAdapter
+    private lateinit var floatingButton: MaterialButton
+    private lateinit var folderStatusText: TextView
 
     private var userIsScrubbing = false
+    private var didShowSupportPromptThisSession = false
+
+    private val libraryListener: () -> Unit = { runOnUiThread { refreshLibraryStatus() } }
 
     private val openDoc = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { loadSrt(it) }
+        uri?.let {
+            try {
+                contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) { /* some providers don't support this -- fine, just won't survive reboot */ }
+            SubtitleLibrary.clearFolder()
+            SettingsStore.update { s -> s.lastSingleFileUri = it.toString(); s.libraryMode = "single" }
+            loadSrt(it)
+            refreshLibraryStatus()
+        }
+    }
+
+    private val openTree = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                )
+            } catch (e: Exception) { /* fine -- just won't survive reboot */ }
+            SubtitleLibrary.setFolder(it)
+            statusText.text = "Folder set - will auto-load a subtitle file as Fanjiao's title changes"
+            refreshLibraryStatus()
+        }
     }
 
     private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -43,6 +72,7 @@ class MainActivity : AppCompatActivity(), ClockListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         SettingsStore.init(this)
+        SubtitleLibrary.init(this)
 
         statusText = findViewById(R.id.statusText)
         currentLineText = findViewById(R.id.currentLineText)
@@ -54,6 +84,7 @@ class MainActivity : AppCompatActivity(), ClockListener {
         nudgeValue = findViewById(R.id.nudgeValue)
         packageInput = findViewById(R.id.packageInput)
         detectedList = findViewById(R.id.detectedList)
+        folderStatusText = findViewById(R.id.folderStatusText)
 
         val transcriptRecycler = findViewById<RecyclerView>(R.id.transcriptList)
         transcriptAdapter = TranscriptAdapter { cue -> PlaybackClock.jumpTo(cue.startMs) }
@@ -62,6 +93,14 @@ class MainActivity : AppCompatActivity(), ClockListener {
 
         findViewById<MaterialButton>(R.id.loadButton).setOnClickListener {
             openDoc.launch(arrayOf("*/*"))
+        }
+        findViewById<MaterialButton>(R.id.loadFolderButton).setOnClickListener {
+            openTree.launch(null)
+        }
+        findViewById<MaterialButton>(R.id.clearFolderButton).setOnClickListener {
+            SubtitleLibrary.clearFolder()
+            statusText.text = "Folder mode off - load a single file above"
+            refreshLibraryStatus()
         }
 
         playButton.setOnClickListener {
@@ -116,11 +155,15 @@ class MainActivity : AppCompatActivity(), ClockListener {
             SettingsStore.save(s)
             Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show()
         }
-        findViewById<MaterialButton>(R.id.floatingButton).setOnClickListener {
+        floatingButton = findViewById(R.id.floatingButton)
+        floatingButton.setOnClickListener {
             toggleOverlay()
         }
         findViewById<MaterialButton>(R.id.styleButton).setOnClickListener {
             SettingsSheet().show(supportFragmentManager, "settings")
+        }
+        findViewById<MaterialButton>(R.id.supportButton).setOnClickListener {
+            openSupportLink()
         }
 
         packageInput.setText(SettingsStore.load().fanjiaoPackage)
@@ -134,25 +177,61 @@ class MainActivity : AppCompatActivity(), ClockListener {
         }
 
         PlaybackClock.addListener(this)
+        SubtitleLibrary.addListener(libraryListener)
+        restoreLastLoaded()
+        refreshLibraryStatus()
     }
 
     override fun onDestroy() {
         PlaybackClock.removeListener(this)
+        SubtitleLibrary.removeListener(libraryListener)
         super.onDestroy()
+    }
+
+    /** Reopens whatever was loaded last time -- a single file, or a folder
+     *  (which will auto-match as soon as Fanjiao reports a title) -- so you
+     *  don't have to pick it again every time you open the app. */
+    private fun restoreLastLoaded() {
+        val s = SettingsStore.load()
+        if (s.libraryMode == "folder" && s.subtitleFolderUri.isNotEmpty()) {
+            statusText.text = "Folder restored - will auto-load as Fanjiao's title changes"
+            return
+        }
+        if (s.libraryMode == "single" && s.lastSingleFileUri.isNotEmpty()) {
+            try {
+                loadSrt(Uri.parse(s.lastSingleFileUri))
+            } catch (e: Exception) {
+                statusText.text = "Couldn't reopen the last file - pick it again"
+            }
+        }
+    }
+
+    private fun refreshLibraryStatus() {
+        if (SubtitleLibrary.isFolderMode()) {
+            val count = SubtitleLibrary.entries.size
+            val matched = SubtitleLibrary.lastMatchedName
+            folderStatusText.text = when {
+                matched != null -> "Folder mode - $count subtitle files found - now showing: $matched"
+                count == 0 -> "Folder mode - no .srt/.ass/.lrc files found in that folder"
+                else -> "Folder mode - $count subtitle files found - waiting for Fanjiao to report a title"
+            }
+        } else {
+            folderStatusText.text = "Single-file mode - use \"Load subtitle folder\" to auto-follow Fanjiao's episodes"
+        }
     }
 
     private fun loadSrt(uri: Uri) {
         try {
+            val name = displayNameFor(uri)
             contentResolver.openInputStream(uri)?.use { stream ->
                 val text = stream.bufferedReader(Charsets.UTF_8).readText()
-                val cues = SrtParser.parse(text)
+                val cues = SubtitleParser.parse(name, text)
                 if (cues.isEmpty()) {
-                    statusText.text = "Couldn't parse that file"
+                    statusText.text = "Couldn't parse that file (.srt, .ass/.ssa, and .lrc are supported)"
                     return
                 }
                 PlaybackClock.loadCues(cues)
-                transcriptAdapter.submit(cues)
-                statusText.text = "${cues.size} lines loaded"
+                statusText.text = "${cues.size} lines loaded from $name"
                 timeTotal.text = fmt(PlaybackClock.totalMs)
             }
         } catch (e: Exception) {
@@ -160,7 +239,44 @@ class MainActivity : AppCompatActivity(), ClockListener {
         }
     }
 
+    /** SAF content:// URIs don't reliably carry a usable extension in the
+     *  URI itself, so ask the content resolver for the real picked file name. */
+    private fun displayNameFor(uri: Uri): String {
+        var name = uri.lastPathSegment ?: "subtitle.srt"
+        var cursor: Cursor? = null
+        try {
+            cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            if (cursor != null && cursor.moveToFirst()) {
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) cursor.getString(idx)?.let { name = it }
+            }
+        } catch (e: Exception) {
+            // Fall back to the URI's last path segment already set above.
+        } finally {
+            cursor?.close()
+        }
+        return name
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateFloatingButtonLabel()
+        refreshLibraryStatus()
+    }
+
+    private fun updateFloatingButtonLabel() {
+        floatingButton.text = if (OverlayService.isRunning) "Stop floating subtitles" else "Start floating subtitles"
+    }
+
     private fun toggleOverlay() {
+        if (OverlayService.isRunning) {
+            startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
+            // Give the service a beat to actually tear down before refreshing
+            // the label; onDestroy() flips isRunning synchronously on this
+            // same thread's next iteration, so a short delay is plenty.
+            floatingButton.postDelayed({ updateFloatingButtonLabel() }, 150)
+            return
+        }
         if (!Settings.canDrawOverlays(this)) {
             Toast.makeText(this, "Grant the floating-window permission first", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -168,6 +284,31 @@ class MainActivity : AppCompatActivity(), ClockListener {
         }
         val intent = Intent(this, OverlayService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+        floatingButton.postDelayed({ updateFloatingButtonLabel() }, 150)
+        maybeShowSupportPrompt()
+    }
+
+    /** A single, low-pressure invite per app session -- not every time
+     *  floating subtitles start, and only if you've set a support link. */
+    private fun maybeShowSupportPrompt() {
+        if (didShowSupportPromptThisSession) return
+        val link = SettingsStore.load().supportLinkUrl
+        if (link.isBlank()) return
+        didShowSupportPromptThisSession = true
+        Toast.makeText(this, "Enjoying it? There's a Support button on the main screen \u2615", Toast.LENGTH_LONG).show()
+    }
+
+    private fun openSupportLink() {
+        val link = SettingsStore.load().supportLinkUrl
+        if (link.isBlank()) {
+            Toast.makeText(this, "No support link set yet - add one in Style settings", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Couldn't open that link", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun fmt(ms: Long): String {
@@ -177,6 +318,8 @@ class MainActivity : AppCompatActivity(), ClockListener {
         return String.format("%02d:%02d", m, s)
     }
 
+    private var lastSubmittedCues: List<Cue>? = null
+
     override fun onTick(elapsedMs: Long, totalMs: Long, activeIndex: Int) {
         timeCurrent.text = fmt(elapsedMs)
         if (!userIsScrubbing && totalMs > 0) {
@@ -184,6 +327,14 @@ class MainActivity : AppCompatActivity(), ClockListener {
         }
         playButton.text = if (PlaybackClock.playing) "Pause" else "Play"
         val cues = PlaybackClock.cues
+        if (cues !== lastSubmittedCues) {
+            // A new list reference means a new file was loaded (e.g. folder
+            // mode auto-switching to a different episode) -- refresh the
+            // transcript view and total time to match.
+            transcriptAdapter.submit(cues)
+            lastSubmittedCues = cues
+            if (totalMs > 0) timeTotal.text = fmt(totalMs)
+        }
         if (activeIndex >= 0) {
             currentLineText.text = cues[activeIndex].text
             nextLineText.text = cues.getOrNull(activeIndex + 1)?.text ?: ""

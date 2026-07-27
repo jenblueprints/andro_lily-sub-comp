@@ -2,6 +2,7 @@ package com.subtitlecompanion.app
 
 import android.content.ComponentName
 import android.content.Context
+import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -13,12 +14,16 @@ import android.util.Log
  * Watches Android's active media sessions for the one belonging to Fanjiao
  * (or whatever app's package name is saved in Settings), and feeds its
  * play/pause state -- and position, if Fanjiao actually reports one -- into
- * PlaybackClock. Requires the user to grant Notification Access, since that's
- * the permission that also unlocks reading other apps' media sessions.
+ * PlaybackClock. Also watches for the session's reported track title
+ * changing, so folder mode (SubtitleLibrary) can auto-switch to the matching
+ * subtitle file when Fanjiao moves to a different episode. Requires the user
+ * to grant Notification Access, since that's the permission that also
+ * unlocks reading other apps' media sessions.
  */
 class FanjiaoListenerService : NotificationListenerService() {
 
     private var controller: MediaController? = null
+    private var lastTitle: String? = null
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
@@ -28,14 +33,28 @@ class FanjiaoListenerService : NotificationListenerService() {
             PlaybackClock.onExternalUpdate(isPlaying, if (position >= 0) position else null)
         }
 
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            handleMetadata(metadata)
+        }
+
         override fun onSessionDestroyed() {
             controller = null
         }
     }
 
+    private fun handleMetadata(metadata: MediaMetadata?) {
+        metadata ?: return
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+        if (title.isNullOrBlank() || title == lastTitle) return
+        lastTitle = title
+        SubtitleLibrary.loadForTitle(title)
+    }
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         SettingsStore.init(applicationContext)
+        SubtitleLibrary.init(applicationContext)
         attach()
     }
 
@@ -57,6 +76,7 @@ class FanjiaoListenerService : NotificationListenerService() {
                 val newController = MediaController(this, match.sessionToken)
                 newController.registerCallback(controllerCallback)
                 newController.playbackState?.let { st -> controllerCallback.onPlaybackStateChanged(st) }
+                newController.metadata?.let { md -> handleMetadata(md) }
                 controller = newController
             }
         } catch (e: SecurityException) {
